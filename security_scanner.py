@@ -693,16 +693,18 @@ class App(tk.Tk):
     def _on_toggle(self, s: dict, new_state: bool) -> None:
         def _apply():
             cmd = s["enable_cmd"] if new_state else s["disable_cmd"]
-            self._set_status(f"{'Enabling' if new_state else 'Disabling'}: {s['name']}…")
+            self.after(0, self._set_status,
+                       f"{'Enabling' if new_state else 'Disabling'}: {s['name']}…")
             _, err, rc = run_ps(cmd)
             if rc == 0:
-                self._apply_result(s, new_state)
-                self._log_msg(f"{'✓ Enabled' if new_state else '✓ Disabled'}: {s['name']}")
+                self.after(0, self._apply_result, s, new_state)
+                self.after(0, self._log_msg,
+                           f"{'✓ Enabled' if new_state else '✓ Disabled'}: {s['name']}")
             else:
                 # revert toggle on failure
-                self._apply_result(s, not new_state)
-                self._log_msg(f"✗ Failed — {s['name']}: {err[:120]}")
-            self._set_status("Ready")
+                self.after(0, self._apply_result, s, not new_state)
+                self.after(0, self._log_msg, f"Skipped {s['name']}: {err[:120]}")
+            self.after(0, self._set_status, "Ready")
         threading.Thread(target=_apply, daemon=True).start()
 
     # ── Scan all ──────────────────────────────────────────────────────────────
@@ -742,20 +744,23 @@ class App(tk.Tk):
 
         ok = errors = 0
         for s in SETTINGS:
-            raw = data.get(s["id"])
-            if raw is None:
+            if s["id"] not in data:
+                # Key missing entirely — JSON truncation or script error
                 enabled: bool | None = None
                 errors += 1
+            elif data[s["id"]] is None:
+                # PowerShell returned $null — setting not configured; treat as unknown
+                enabled = None
             else:
                 # PowerShell booleans arrive as Python bool; cast to str for checker
-                enabled = is_setting_enabled(s, str(raw))
+                enabled = is_setting_enabled(s, str(data[s["id"]]))
                 ok += 1
             # schedule UI update on main thread (safe from background thread)
             self.after(0, self._apply_result, s, enabled)
 
         self.after(0, self._ts_lbl.configure,
                    {"text": f"Last scan: {datetime.now().strftime('%H:%M:%S')}"})
-        summary = f"Scan complete — {ok} read, {errors} errors"
+        summary = f"Scan complete — {ok} read" + (f", {errors} errors" if errors else "")
         self.after(0, self._log_msg, summary)
         self.after(0, self._set_status, summary)
 
@@ -775,24 +780,55 @@ class App(tk.Tk):
 
     def _apply_all(self, enable: bool) -> None:
         verb = "Enabling" if enable else "Disabling"
-        self._log_msg(f"{verb} all settings…")
-        ok = fail = 0
-        for s in SETTINGS:
-            if s.get("readonly"):
-                continue
-            self._set_status(f"{verb}: {s['name']}…")
+        self.after(0, self._log_msg, f"{verb} all settings…")
+        ok = 0
+        skipped: list[str] = []
+
+        # Batch all Set-MpPreference calls into one PowerShell process to avoid
+        # Defender WMI provider hang when invoked in rapid succession.
+        mp_settings = [
+            s for s in SETTINGS
+            if not s.get("readonly")
+            and "MpPreference" in (s["enable_cmd"] if enable else s["disable_cmd"])
+        ]
+        other_settings = [
+            s for s in SETTINGS
+            if not s.get("readonly")
+            and "MpPreference" not in (s["enable_cmd"] if enable else s["disable_cmd"])
+        ]
+
+        if mp_settings:
+            self.after(0, self._set_status, f"{verb}: Defender scan settings…")
+            batch = "$ErrorActionPreference = 'SilentlyContinue'\n" + "\n".join(
+                s["enable_cmd"] if enable else s["disable_cmd"] for s in mp_settings
+            )
+            _, err, rc = run_ps(batch)
+            for s in mp_settings:
+                if rc == 0:
+                    self.after(0, self._apply_result, s, enable)
+                    self.after(0, self._log_msg, f"  ✓ {s['name']}")
+                    ok += 1
+                else:
+                    self.after(0, self._log_msg, f"  Skipped {s['name']}: {err[:80]}")
+                    skipped.append(s["name"])
+
+        for s in other_settings:
             cmd = s["enable_cmd"] if enable else s["disable_cmd"]
-            _, err, rc = run_ps(cmd)
-            if rc == 0:
-                self._apply_result(s, enable)
-                self._log_msg(f"  ✓ {s['name']}")
+            self.after(0, self._set_status, f"{verb}: {s['name']}…")
+            _, err2, rc2 = run_ps(cmd)
+            if rc2 == 0:
+                self.after(0, self._apply_result, s, enable)
+                self.after(0, self._log_msg, f"  ✓ {s['name']}")
                 ok += 1
             else:
-                self._log_msg(f"  ✗ {s['name']}: {err[:100]}")
-                fail += 1
-        summary = f"Done — {ok} succeeded, {fail} failed"
-        self._log_msg(summary)
-        self._set_status(summary)
+                self.after(0, self._log_msg, f"  Skipped {s['name']}: {err2[:80]}")
+                skipped.append(s["name"])
+
+        if skipped:
+            self.after(0, self._log_msg, f"Skipped ({len(skipped)}): {', '.join(skipped)}")
+        summary = f"Done — {ok} succeeded, {len(skipped)} skipped"
+        self.after(0, self._log_msg, summary)
+        self.after(0, self._set_status, summary)
         threading.Thread(target=self._do_scan, daemon=True).start()
 
 
