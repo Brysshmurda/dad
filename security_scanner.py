@@ -252,7 +252,7 @@ SETTINGS: list[dict] = [
         "id": "secureboot", "category": "devicesecurity",
         "name": "Secure Boot",
         "desc": "Prevents sophisticated low-level malware like rootkits from loading during startup. Managed by firmware — read only.",
-        "check_cmd": "try { Confirm-SecureBootUEFI } catch { 'False' }",
+        "check_cmd": "[bool](Confirm-SecureBootUEFI)",
         "enabled_value": "True",
         "enable_cmd":  "Write-Host 'Secure Boot is controlled by your device firmware (BIOS/UEFI).'",
         "disable_cmd": "Write-Host 'Secure Boot is controlled by your device firmware (BIOS/UEFI).'",
@@ -426,8 +426,9 @@ class App(tk.Tk):
         self.configure(bg=C.BG)
 
         self._active_cat: str = CATEGORIES[0]["id"]
-        self._toggles:   dict[str, Toggle] = {}
+        self._toggles:    dict[str, Toggle]   = {}
         self._status_labels: dict[str, tk.Label] = {}
+        self._results:    dict[str, bool | None] = {}  # survives category switches
 
         self._build_ui()
         self._select_category(CATEGORIES[0]["id"])
@@ -614,6 +615,11 @@ class App(tk.Tk):
         for i, s in enumerate(settings):
             self._setting_row(self._content, s, i < len(settings) - 1)
 
+        # Restore any results we already have so switching category never wipes state
+        for s in settings:
+            if s["id"] in self._results:
+                self._apply_result(s, self._results[s["id"]])
+
         # padding at bottom
         tk.Frame(self._content, bg=C.BG, height=20).pack()
 
@@ -669,6 +675,7 @@ class App(tk.Tk):
     # ── Per-setting update ────────────────────────────────────────────────────
 
     def _apply_result(self, s: dict, enabled: bool | None) -> None:
+        self._results[s["id"]] = enabled          # persist across category switches
         toggle = self._toggles.get(s["id"])
         label  = self._status_labels.get(s["id"])
         if toggle:
@@ -704,25 +711,53 @@ class App(tk.Tk):
         threading.Thread(target=self._do_scan, daemon=True).start()
 
     def _do_scan(self) -> None:
-        self._set_status("Scanning all settings…")
+        import json as _json
+
+        self._set_status("Scanning…")
         self._log_msg("Starting scan…")
-        ok = err = 0
+
+        # Build ONE PowerShell script that checks every setting and emits JSON.
+        # This replaces 27 separate process launches with a single call.
+        lines = [
+            "$ErrorActionPreference = 'SilentlyContinue'",
+            "$r = [ordered]@{}",
+        ]
         for s in SETTINGS:
-            self._set_status(f"Checking: {s['name']}…")
-            out, error, rc = run_ps(s["check_cmd"])
-            if rc != 0 and not out:
-                self._apply_result(s, None)
-                self._log_msg(f"  ✗ {s['name']}: {error[:100]}")
-                err += 1
+            lines.append(f"$r['{s['id']}'] = try {{ {s['check_cmd']} }} catch {{ $null }}")
+        lines.append("$r | ConvertTo-Json -Compress -Depth 2")
+
+        out, err, rc = run_ps("\n".join(lines))
+
+        if not out:
+            self._log_msg(f"Scan error: {err[:200]}")
+            self._set_status("Scan failed — see log")
+            return
+
+        try:
+            data = _json.loads(out)
+        except _json.JSONDecodeError:
+            self._log_msg(f"Parse error: {out[:200]}")
+            self._set_status("Scan failed — see log")
+            return
+
+        ok = errors = 0
+        for s in SETTINGS:
+            raw = data.get(s["id"])
+            if raw is None:
+                enabled: bool | None = None
+                errors += 1
             else:
-                enabled = is_setting_enabled(s, out)
-                self._apply_result(s, enabled)
+                # PowerShell booleans arrive as Python bool; cast to str for checker
+                enabled = is_setting_enabled(s, str(raw))
                 ok += 1
-        self._ts_lbl.configure(
-            text=f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
-        summary = f"Scan complete — {ok} read, {err} errors"
-        self._log_msg(summary)
-        self._set_status(summary)
+            # schedule UI update on main thread (safe from background thread)
+            self.after(0, self._apply_result, s, enabled)
+
+        self.after(0, self._ts_lbl.configure,
+                   {"text": f"Last scan: {datetime.now().strftime('%H:%M:%S')}"})
+        summary = f"Scan complete — {ok} read, {errors} errors"
+        self.after(0, self._log_msg, summary)
+        self.after(0, self._set_status, summary)
 
     # ── Enable / Disable all ──────────────────────────────────────────────────
 
