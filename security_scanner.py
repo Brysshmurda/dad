@@ -231,6 +231,15 @@ SETTINGS: list[dict] = [
         "disable_cmd": "New-Item -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Name EnableWebContentEvaluation -Value 0",
     },
     {
+        "id": "phishing", "category": "appbrowser",
+        "name": "Phishing protection",
+        "desc": "Warns you when you type a password on malicious sites, reuse passwords, or store passwords unsafely. Windows 11 22H2+.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\WTDS\\Components' -ErrorAction SilentlyContinue).ServiceEnabled",
+        "enabled_value": "1",
+        "enable_cmd":  "New-Item -Path 'HKCU:\\SOFTWARE\\Microsoft\\WTDS\\Components' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\WTDS\\Components' -Name ServiceEnabled -Value 1",
+        "disable_cmd": "Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\WTDS\\Components' -Name ServiceEnabled -Value 0 -ErrorAction SilentlyContinue",
+    },
+    {
         "id": "exploitprotection", "category": "appbrowser",
         "name": "Exploit protection",
         "desc": "Applies exploit mitigation techniques to help protect your device against attacks.",
@@ -260,6 +269,25 @@ SETTINGS: list[dict] = [
         "readonly": True,
     },
     {
+        "id": "kernelshadowstacks", "category": "devicesecurity",
+        "name": "Kernel-mode Hardware-enforced Stack Protection",
+        "desc": "Prevents attacks that substitute return addresses in kernel-mode memory. Requires Memory integrity to be enabled first.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks' -ErrorAction SilentlyContinue).Enabled",
+        "enabled_value": "1",
+        "enable_cmd":  "New-Item -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks' -Name Enabled -Value 1",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks' -Name Enabled -Value 0 -ErrorAction SilentlyContinue",
+    },
+    {
+        "id": "dmaprotection", "category": "devicesecurity",
+        "name": "Memory access protection",
+        "desc": "Protects your device's memory from attacks by malicious external devices (Kernel DMA Protection). Controlled by device firmware — read only.",
+        "check_cmd": "(Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\\Microsoft\\Windows\\DeviceGuard -ErrorAction SilentlyContinue).DmaProtectionStatus",
+        "enabled_check": "nonzero",
+        "enable_cmd":  "Write-Host 'Memory access protection is controlled by your device firmware (UEFI/BIOS).'",
+        "disable_cmd": "Write-Host 'Memory access protection is controlled by your device firmware (UEFI/BIOS).'",
+        "readonly": True,
+    },
+    {
         "id": "driverblock", "category": "devicesecurity",
         "name": "Microsoft Vulnerable Driver Blocklist",
         "desc": "Blocks drivers with known security vulnerabilities from loading.",
@@ -267,6 +295,15 @@ SETTINGS: list[dict] = [
         "enabled_value": "1",
         "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config' -Name VulnerableDriverBlocklistEnable -Value 1 -Force",
         "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config' -Name VulnerableDriverBlocklistEnable -Value 0 -Force",
+    },
+    {
+        "id": "lsa", "category": "devicesecurity",
+        "name": "Local Security Authority protection",
+        "desc": "Helps protect user credentials by preventing unsigned drivers and plugins from loading into the Local Security Authority.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -ErrorAction SilentlyContinue).RunAsPPL",
+        "enabled_check": "nonzero",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name RunAsPPL -Value 1",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name RunAsPPL -Value 0",
     },
     # ── System & remote access ────────────────────────────────────────────────
     {
