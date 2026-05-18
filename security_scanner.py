@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
-"""Windows 11 Security Settings Scanner — scan, enable, and disable security features."""
+"""Windows 11 Security Settings Scanner — mirrors Windows Security app layout."""
 
+import ctypes
 import subprocess
 import sys
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext
 
 # ── Admin helpers ─────────────────────────────────────────────────────────────
 
 def is_admin() -> bool:
     try:
-        import ctypes
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
-
 def elevate() -> None:
-    import ctypes
     args = " ".join(f'"{a}"' for a in sys.argv)
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1)
     sys.exit(0)
-
-
-# ── PowerShell runner ─────────────────────────────────────────────────────────
 
 def run_ps(cmd: str) -> tuple[str, str, int]:
     try:
         proc = subprocess.run(
             ["powershell", "-NonInteractive", "-NoProfile", "-Command", cmd],
-            capture_output=True,
-            text=True,
-            timeout=30,
+            capture_output=True, text=True, timeout=30,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return proc.stdout.strip(), proc.stderr.strip(), proc.returncode
@@ -42,169 +35,288 @@ def run_ps(cmd: str) -> tuple[str, str, int]:
     except Exception as exc:
         return "", str(exc), -1
 
+# ── Catalogue ─────────────────────────────────────────────────────────────────
 
-# ── Security settings catalogue ───────────────────────────────────────────────
-#
-# enabled_check modes:
-#   (default)       compare raw output to enabled_value (case-insensitive)
-#   "nonzero"       any non-zero integer / non-"false" output → enabled
-#   "running"       service status == "Running"
-#   "not_disabled"  service StartType != "Disabled"
-#   "notempty_nooff" non-empty and not "Off"
-#
+CATEGORIES = [
+    {"id": "virus",          "label": "Virus & threat\nprotection",    "icon": "🛡"},
+    {"id": "firewall",       "label": "Firewall &\nnetwork protection", "icon": "🔥"},
+    {"id": "appbrowser",     "label": "App & browser\ncontrol",        "icon": "🌐"},
+    {"id": "devicesecurity", "label": "Device\nsecurity",              "icon": "💻"},
+    {"id": "system",         "label": "System &\nremote access",       "icon": "⚙"},
+]
+
 SETTINGS: list[dict] = [
-    # ── Windows Defender ─────────────────────────────────────────────────────
+    # ── Virus & threat protection ─────────────────────────────────────────────
     {
-        "name": "Real-Time Protection",
-        "category": "Defender",
-        "desc": "Scans files as they are accessed",
+        "id": "realtime", "category": "virus",
+        "name": "Real-time protection",
+        "desc": "Locates and stops malware from installing or running on your device.",
         "check_cmd": "(Get-MpPreference).DisableRealtimeMonitoring",
         "enabled_value": "False",
-        "enable_cmd": "Set-MpPreference -DisableRealtimeMonitoring $false",
+        "enable_cmd":  "Set-MpPreference -DisableRealtimeMonitoring $false",
         "disable_cmd": "Set-MpPreference -DisableRealtimeMonitoring $true",
     },
     {
-        "name": "Behavior Monitoring",
-        "category": "Defender",
-        "desc": "Monitors running processes for malicious behavior",
-        "check_cmd": "(Get-MpPreference).DisableBehaviorMonitoring",
-        "enabled_value": "False",
-        "enable_cmd": "Set-MpPreference -DisableBehaviorMonitoring $false",
-        "disable_cmd": "Set-MpPreference -DisableBehaviorMonitoring $true",
-    },
-    {
-        "name": "Download Scanning (IOAV)",
-        "category": "Defender",
-        "desc": "Scans files downloaded from the internet",
-        "check_cmd": "(Get-MpPreference).DisableIOAVProtection",
-        "enabled_value": "False",
-        "enable_cmd": "Set-MpPreference -DisableIOAVProtection $false",
-        "disable_cmd": "Set-MpPreference -DisableIOAVProtection $true",
-    },
-    {
-        "name": "Script Scanning",
-        "category": "Defender",
-        "desc": "Scans scripts before they are executed",
-        "check_cmd": "(Get-MpPreference).DisableScriptScanning",
-        "enabled_value": "False",
-        "enable_cmd": "Set-MpPreference -DisableScriptScanning $false",
-        "disable_cmd": "Set-MpPreference -DisableScriptScanning $true",
-    },
-    {
-        "name": "Network Protection",
-        "category": "Defender",
-        "desc": "Blocks connections to known-malicious domains",
-        "check_cmd": "[int](Get-MpPreference).EnableNetworkProtection",
-        "enabled_check": "nonzero",
-        "enable_cmd": "Set-MpPreference -EnableNetworkProtection Enabled",
-        "disable_cmd": "Set-MpPreference -EnableNetworkProtection Disabled",
-    },
-    {
-        "name": "Cloud Protection (MAPS)",
-        "category": "Defender",
-        "desc": "Sends samples to Microsoft cloud for fast analysis",
+        "id": "cloudprotection", "category": "virus",
+        "name": "Cloud-delivered protection",
+        "desc": "Provides increased and faster protection with access to the latest threat data in the cloud.",
         "check_cmd": "[int](Get-MpPreference).MAPSReporting",
         "enabled_check": "nonzero",
-        "enable_cmd": "Set-MpPreference -MAPSReporting Advanced",
+        "enable_cmd":  "Set-MpPreference -MAPSReporting Advanced",
         "disable_cmd": "Set-MpPreference -MAPSReporting Disabled",
     },
     {
-        "name": "Controlled Folder Access",
-        "category": "Defender",
-        "desc": "Protects sensitive folders from ransomware",
+        "id": "samplesubmission", "category": "virus",
+        "name": "Automatic sample submission",
+        "desc": "Sends sample files to Microsoft to help protect you and others from potential threats.",
+        "check_cmd": "[int](Get-MpPreference).SubmitSamplesConsent",
+        "enabled_check": "sampleconsent",
+        "enable_cmd":  "Set-MpPreference -SubmitSamplesConsent SendSafeSamples",
+        "disable_cmd": "Set-MpPreference -SubmitSamplesConsent NeverSend",
+    },
+    {
+        "id": "tamper", "category": "virus",
+        "name": "Tamper Protection",
+        "desc": "Prevents others from tampering with important Windows Security settings.",
+        "check_cmd": "(Get-MpComputerStatus).IsTamperProtected",
+        "enabled_value": "True",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows Defender\\Features' -Name TamperProtection -Value 5",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows Defender\\Features' -Name TamperProtection -Value 4",
+    },
+    {
+        "id": "controlledfolder", "category": "virus",
+        "name": "Controlled folder access",
+        "desc": "Protect files, folders and memory areas on your device from unauthorized changes by unfriendly applications.",
         "check_cmd": "[int](Get-MpPreference).EnableControlledFolderAccess",
         "enabled_check": "nonzero",
-        "enable_cmd": "Set-MpPreference -EnableControlledFolderAccess Enabled",
+        "enable_cmd":  "Set-MpPreference -EnableControlledFolderAccess Enabled",
         "disable_cmd": "Set-MpPreference -EnableControlledFolderAccess Disabled",
     },
-    # ── Firewall ─────────────────────────────────────────────────────────────
     {
-        "name": "Firewall - Domain",
-        "category": "Firewall",
-        "desc": "Firewall for domain / corporate networks",
+        "id": "pua", "category": "virus",
+        "name": "Reputation-based protection (PUA)",
+        "desc": "Blocks potentially unwanted apps, malicious sites, downloads and web content.",
+        "check_cmd": "[int](Get-MpPreference).PUAProtection",
+        "enabled_check": "nonzero",
+        "enable_cmd":  "Set-MpPreference -PUAProtection Enabled",
+        "disable_cmd": "Set-MpPreference -PUAProtection Disabled",
+    },
+    {
+        "id": "networkprotection", "category": "virus",
+        "name": "Network protection",
+        "desc": "Blocks connections to dangerous domains hosting phishing scams, exploits and malicious content.",
+        "check_cmd": "[int](Get-MpPreference).EnableNetworkProtection",
+        "enabled_check": "nonzero",
+        "enable_cmd":  "Set-MpPreference -EnableNetworkProtection Enabled",
+        "disable_cmd": "Set-MpPreference -EnableNetworkProtection Disabled",
+    },
+    {
+        "id": "behaviormonitoring", "category": "virus",
+        "name": "Behavior monitoring",
+        "desc": "Applies a set of heuristics to detect malicious software based on its behavior on your device.",
+        "check_cmd": "(Get-MpPreference).DisableBehaviorMonitoring",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableBehaviorMonitoring $false",
+        "disable_cmd": "Set-MpPreference -DisableBehaviorMonitoring $true",
+    },
+    {
+        "id": "scriptscanning", "category": "virus",
+        "name": "Script scanning",
+        "desc": "Provides additional analysis of scripts to help detect malicious behavior.",
+        "check_cmd": "(Get-MpPreference).DisableScriptScanning",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableScriptScanning $false",
+        "disable_cmd": "Set-MpPreference -DisableScriptScanning $true",
+    },
+    {
+        "id": "ioav", "category": "virus",
+        "name": "Downloaded files and attachments scanning",
+        "desc": "Scans all downloaded files and email attachments for malicious content.",
+        "check_cmd": "(Get-MpPreference).DisableIOAVProtection",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableIOAVProtection $false",
+        "disable_cmd": "Set-MpPreference -DisableIOAVProtection $true",
+    },
+    {
+        "id": "emailscanning", "category": "virus",
+        "name": "Email scanning",
+        "desc": "Scans email messages and attachments for viruses and other malware.",
+        "check_cmd": "(Get-MpPreference).DisableEmailScanning",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableEmailScanning $false",
+        "disable_cmd": "Set-MpPreference -DisableEmailScanning $true",
+    },
+    {
+        "id": "removabledrive", "category": "virus",
+        "name": "Removable drive scanning",
+        "desc": "Scans USB drives and other removable media when they are inserted.",
+        "check_cmd": "(Get-MpPreference).DisableRemovableDriveScanning",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableRemovableDriveScanning $false",
+        "disable_cmd": "Set-MpPreference -DisableRemovableDriveScanning $true",
+    },
+    {
+        "id": "archivescanning", "category": "virus",
+        "name": "Archive scanning",
+        "desc": "Scans compressed archives such as .zip and .cab files for malicious content.",
+        "check_cmd": "(Get-MpPreference).DisableArchiveScanning",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableArchiveScanning $false",
+        "disable_cmd": "Set-MpPreference -DisableArchiveScanning $true",
+    },
+    {
+        "id": "intrusionprevention", "category": "virus",
+        "name": "Intrusion prevention system",
+        "desc": "Inspects network traffic to detect and block exploitation attempts.",
+        "check_cmd": "(Get-MpPreference).DisableIntrusionPreventionSystem",
+        "enabled_value": "False",
+        "enable_cmd":  "Set-MpPreference -DisableIntrusionPreventionSystem $false",
+        "disable_cmd": "Set-MpPreference -DisableIntrusionPreventionSystem $true",
+    },
+    # ── Firewall & network protection ─────────────────────────────────────────
+    {
+        "id": "fw_domain", "category": "firewall",
+        "name": "Domain network",
+        "desc": "Networks at a workplace that are joined to a domain.",
         "check_cmd": "(Get-NetFirewallProfile -Profile Domain).Enabled",
         "enabled_value": "True",
-        "enable_cmd": "Set-NetFirewallProfile -Profile Domain -Enabled True",
+        "enable_cmd":  "Set-NetFirewallProfile -Profile Domain -Enabled True",
         "disable_cmd": "Set-NetFirewallProfile -Profile Domain -Enabled False",
     },
     {
-        "name": "Firewall - Private",
-        "category": "Firewall",
-        "desc": "Firewall for private / home networks",
+        "id": "fw_private", "category": "firewall",
+        "name": "Private network",
+        "desc": "Networks at home or work where you know and trust the people and devices on the network.",
         "check_cmd": "(Get-NetFirewallProfile -Profile Private).Enabled",
         "enabled_value": "True",
-        "enable_cmd": "Set-NetFirewallProfile -Profile Private -Enabled True",
+        "enable_cmd":  "Set-NetFirewallProfile -Profile Private -Enabled True",
         "disable_cmd": "Set-NetFirewallProfile -Profile Private -Enabled False",
     },
     {
-        "name": "Firewall - Public",
-        "category": "Firewall",
-        "desc": "Firewall for public / unsecured networks",
+        "id": "fw_public", "category": "firewall",
+        "name": "Public network",
+        "desc": "Networks in public places such as airports and coffee shops.",
         "check_cmd": "(Get-NetFirewallProfile -Profile Public).Enabled",
         "enabled_value": "True",
-        "enable_cmd": "Set-NetFirewallProfile -Profile Public -Enabled True",
+        "enable_cmd":  "Set-NetFirewallProfile -Profile Public -Enabled True",
         "disable_cmd": "Set-NetFirewallProfile -Profile Public -Enabled False",
     },
-    # ── System ───────────────────────────────────────────────────────────────
+    # ── App & browser control ─────────────────────────────────────────────────
     {
-        "name": "User Account Control (UAC)",
-        "category": "System",
-        "desc": "Prompts for elevation when admin rights are needed",
-        "check_cmd": "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System').EnableLUA",
-        "enabled_value": "1",
-        "enable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1",
-        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0",
-    },
-    {
-        "name": "SmartScreen (Explorer)",
-        "category": "System",
-        "desc": "Warns about malicious downloads and websites",
+        "id": "smartscreen_apps", "category": "appbrowser",
+        "name": "Check apps and files",
+        "desc": "Windows Defender SmartScreen helps protect your device by checking for unrecognized apps and files from the web.",
         "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer' -ErrorAction SilentlyContinue).SmartScreenEnabled",
         "enabled_check": "notempty_nooff",
-        "enable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer' -Name SmartScreenEnabled -Value On",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer' -Name SmartScreenEnabled -Value On",
         "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer' -Name SmartScreenEnabled -Value Off",
     },
     {
-        "name": "Windows Update Service",
-        "category": "System",
-        "desc": "Downloads and installs Windows security updates",
+        "id": "smartscreen_edge", "category": "appbrowser",
+        "name": "SmartScreen for Microsoft Edge",
+        "desc": "Microsoft Defender SmartScreen helps protect your device from malicious sites and downloads.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge' -ErrorAction SilentlyContinue).SmartScreenEnabled",
+        "enabled_check": "edge_smartscreen",
+        "enable_cmd":  "New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge' -Name SmartScreenEnabled -Value 1",
+        "disable_cmd": "New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge' -Name SmartScreenEnabled -Value 0",
+    },
+    {
+        "id": "smartscreen_store", "category": "appbrowser",
+        "name": "SmartScreen for Microsoft Store apps",
+        "desc": "Checks web content used by Microsoft Store apps to help protect your device.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -ErrorAction SilentlyContinue).EnableWebContentEvaluation",
+        "enabled_value": "1",
+        "enable_cmd":  "New-Item -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Name EnableWebContentEvaluation -Value 1",
+        "disable_cmd": "New-Item -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppHost' -Name EnableWebContentEvaluation -Value 0",
+    },
+    {
+        "id": "exploitprotection", "category": "appbrowser",
+        "name": "Exploit protection",
+        "desc": "Applies exploit mitigation techniques to help protect your device against attacks.",
+        "check_cmd": "(Get-ProcessMitigation -System).DEP.Enable",
+        "enabled_value": "ON",
+        "enable_cmd":  "Set-ProcessMitigation -System -Enable DEP",
+        "disable_cmd": "Set-ProcessMitigation -System -Disable DEP",
+    },
+    # ── Device security ───────────────────────────────────────────────────────
+    {
+        "id": "hvci", "category": "devicesecurity",
+        "name": "Memory integrity",
+        "desc": "Prevents attacks from inserting malicious code into high-security processes. A restart is required after changing.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -ErrorAction SilentlyContinue).Enabled",
+        "enabled_value": "1",
+        "enable_cmd":  "New-Item -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name Enabled -Value 1",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name Enabled -Value 0 -ErrorAction SilentlyContinue",
+    },
+    {
+        "id": "secureboot", "category": "devicesecurity",
+        "name": "Secure Boot",
+        "desc": "Prevents sophisticated low-level malware like rootkits from loading during startup. Managed by firmware — read only.",
+        "check_cmd": "try { Confirm-SecureBootUEFI } catch { 'False' }",
+        "enabled_value": "True",
+        "enable_cmd":  "Write-Host 'Secure Boot is controlled by your device firmware (BIOS/UEFI).'",
+        "disable_cmd": "Write-Host 'Secure Boot is controlled by your device firmware (BIOS/UEFI).'",
+        "readonly": True,
+    },
+    {
+        "id": "driverblock", "category": "devicesecurity",
+        "name": "Microsoft Vulnerable Driver Blocklist",
+        "desc": "Blocks drivers with known security vulnerabilities from loading.",
+        "check_cmd": "(Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config' -ErrorAction SilentlyContinue).VulnerableDriverBlocklistEnable",
+        "enabled_value": "1",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config' -Name VulnerableDriverBlocklistEnable -Value 1 -Force",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config' -Name VulnerableDriverBlocklistEnable -Value 0 -Force",
+    },
+    # ── System & remote access ────────────────────────────────────────────────
+    {
+        "id": "uac", "category": "system",
+        "name": "User Account Control (UAC)",
+        "desc": "Helps prevent unauthorized changes to your device by asking for permission or an administrator password.",
+        "check_cmd": "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System').EnableLUA",
+        "enabled_value": "1",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0",
+    },
+    {
+        "id": "windowsupdate", "category": "system",
+        "name": "Windows Update",
+        "desc": "Keeps Windows up to date with the latest security patches and improvements.",
         "check_cmd": "(Get-Service wuauserv).StartType",
         "enabled_check": "not_disabled",
-        "enable_cmd": "Set-Service wuauserv -StartupType Automatic; Start-Service wuauserv -ErrorAction SilentlyContinue",
+        "enable_cmd":  "Set-Service wuauserv -StartupType Automatic; Start-Service wuauserv -ErrorAction SilentlyContinue",
         "disable_cmd": "Stop-Service wuauserv -Force -ErrorAction SilentlyContinue; Set-Service wuauserv -StartupType Disabled",
     },
     {
-        "name": "Windows Defender Service",
-        "category": "System",
-        "desc": "Core Windows Defender antivirus service",
+        "id": "defenderservice", "category": "system",
+        "name": "Windows Defender Antivirus Service",
+        "desc": "Provides real-time protection against viruses, malware and other security threats.",
         "check_cmd": "(Get-Service WinDefend).Status",
         "enabled_check": "running",
-        "enable_cmd": "Set-Service WinDefend -StartupType Automatic; Start-Service WinDefend -ErrorAction SilentlyContinue",
+        "enable_cmd":  "Set-Service WinDefend -StartupType Automatic; Start-Service WinDefend -ErrorAction SilentlyContinue",
         "disable_cmd": "Stop-Service WinDefend -Force -ErrorAction SilentlyContinue; Set-Service WinDefend -StartupType Disabled",
     },
-    # ── Remote Access ────────────────────────────────────────────────────────
     {
-        "name": "Remote Desktop (RDP)",
-        "category": "Remote Access",
-        "desc": "Allows incoming remote desktop connections",
+        "id": "rdp", "category": "system",
+        "name": "Remote Desktop",
+        "desc": "Allow your PC to be controlled from another device over a network connection.",
         "check_cmd": "(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server').fDenyTSConnections",
         "enabled_value": "0",
-        "enable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0; Set-NetFirewallRule -DisplayGroup 'Remote Desktop' -Enabled True -ErrorAction SilentlyContinue",
-        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 1; Set-NetFirewallRule -DisplayGroup 'Remote Desktop' -Enabled False -ErrorAction SilentlyContinue",
+        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0",
+        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 1",
     },
     {
+        "id": "remoteregistry", "category": "system",
         "name": "Remote Registry",
-        "category": "Remote Access",
-        "desc": "Allows remote access to this machine's registry",
+        "desc": "Allows remote users to modify registry settings on this computer.",
         "check_cmd": "(Get-Service RemoteRegistry).Status",
         "enabled_check": "running",
-        "enable_cmd": "Set-Service RemoteRegistry -StartupType Automatic; Start-Service RemoteRegistry -ErrorAction SilentlyContinue",
+        "enable_cmd":  "Set-Service RemoteRegistry -StartupType Automatic; Start-Service RemoteRegistry -ErrorAction SilentlyContinue",
         "disable_cmd": "Stop-Service RemoteRegistry -Force -ErrorAction SilentlyContinue; Set-Service RemoteRegistry -StartupType Disabled",
     },
 ]
 
 
-def check_is_enabled(setting: dict, raw: str) -> bool:
+def is_setting_enabled(setting: dict, raw: str) -> bool | None:
     out = raw.strip()
     mode = setting.get("enabled_check")
     if mode == "nonzero":
@@ -218,178 +330,331 @@ def check_is_enabled(setting: dict, raw: str) -> bool:
         return bool(out) and out.lower() not in ("off", "0", "false", "")
     elif mode == "not_disabled":
         return out.lower() != "disabled"
+    elif mode == "sampleconsent":
+        try:
+            return int(out) != 2  # 2 = NeverSend (disabled)
+        except ValueError:
+            return None
+    elif mode == "edge_smartscreen":
+        if not out:
+            return True  # not set → default on
+        try:
+            return int(out) == 1
+        except ValueError:
+            return None
     else:
         expected = str(setting.get("enabled_value", "True"))
         return out.lower() == expected.lower()
 
 
-# ── GUI ───────────────────────────────────────────────────────────────────────
+# ── Toggle widget ─────────────────────────────────────────────────────────────
+
+class Toggle(tk.Canvas):
+    W, H = 48, 26
+
+    def __init__(self, parent, command=None, readonly=False, **kw):
+        bg = kw.pop("bg", C.CARD)
+        super().__init__(parent, width=self.W, height=self.H,
+                         highlightthickness=0, bg=bg, **kw)
+        self._state: bool | None = None
+        self._command = command
+        self._readonly = readonly
+        if not readonly:
+            self.bind("<Button-1>", self._click)
+            self.configure(cursor="hand2")
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w, h, r = self.W, self.H, self.H // 2
+        if self._state is True:
+            color, knob_x = C.ACCENT, w - h + 3
+        elif self._state is False:
+            color, knob_x = "#ababab", 3
+        else:
+            color, knob_x = "#d0d0d0", r - 8  # unknown / loading
+        # pill track
+        self.create_arc(0, 0, h, h, start=90, extent=180,
+                        fill=color, outline=color, style=tk.CHORD)
+        self.create_arc(w - h, 0, w, h, start=270, extent=180,
+                        fill=color, outline=color, style=tk.CHORD)
+        self.create_rectangle(r, 0, w - r, h, fill=color, outline=color)
+        # knob
+        pad = 4
+        self.create_oval(knob_x, pad, knob_x + h - 2 * pad, h - pad,
+                         fill="white", outline="white")
+
+    def _click(self, _=None):
+        self.set(not bool(self._state))
+        if self._command:
+            self._command(self._state)
+
+    def set(self, value: bool | None):
+        self._state = value
+        self._draw()
+
+    def get(self) -> bool | None:
+        return self._state
+
+
+# ── Colour palette (Windows 11 light) ────────────────────────────────────────
+
+class C:
+    BG      = "#f3f3f3"
+    SIDEBAR = "#eeeeee"
+    CARD    = "#ffffff"
+    ACCENT  = "#0078d4"
+    TEXT    = "#1a1a1a"
+    SUBTEXT = "#616161"
+    DIVIDER = "#e0e0e0"
+    SEL_BG  = "#e5f1fb"
+    SEL_BAR = "#0078d4"
+    HOVER   = "#e8e8e8"
+    GREEN   = "#107c10"
+    RED     = "#c42b1c"
+    AMBER   = "#9d5d00"
+
+
+# ── Main application ──────────────────────────────────────────────────────────
 
 class App(tk.Tk):
-    COLS = ("Setting", "Category", "Status", "Description")
-
-    # Catppuccin Mocha-inspired palette
-    BG     = "#1e1e2e"
-    SURFACE = "#181825"
-    OVERLAY = "#313244"
-    FG     = "#cdd6f4"
-    SUBTEXT = "#a6adc8"
-    ACCENT = "#cba6f7"
-    BLUE   = "#89b4fa"
-    GREEN  = "#a6e3a1"
-    RED    = "#f38ba8"
-    YELLOW = "#f9e2af"
-
     def __init__(self) -> None:
         super().__init__()
-        self.title("Windows 11 Security Settings Scanner")
-        self.geometry("980x660")
-        self.minsize(720, 480)
-        self.configure(bg=self.BG)
-        self._build_styles()
+        self.title("Windows Security")
+        self.geometry("1000x680")
+        self.minsize(760, 520)
+        self.configure(bg=C.BG)
+
+        self._active_cat: str = CATEGORIES[0]["id"]
+        self._toggles:   dict[str, Toggle] = {}
+        self._status_labels: dict[str, tk.Label] = {}
+
         self._build_ui()
+        self._select_category(CATEGORIES[0]["id"])
 
-    # ── Styles ────────────────────────────────────────────────────────────────
-
-    def _build_styles(self) -> None:
-        s = ttk.Style(self)
-        s.theme_use("clam")
-
-        s.configure("TFrame",       background=self.BG)
-        s.configure("TLabel",       background=self.BG,      foreground=self.FG,
-                    font=("Segoe UI", 10))
-        s.configure("Header.TLabel", background=self.BG,     foreground=self.ACCENT,
-                    font=("Segoe UI", 14, "bold"))
-        s.configure("Sub.TLabel",   background=self.BG,      foreground=self.SUBTEXT,
-                    font=("Segoe UI", 9))
-
-        for name, bg, active_bg in (
-            ("Scan.TButton",    self.BLUE,  "#7aa2d4"),
-            ("Enable.TButton",  self.GREEN, "#89c98b"),
-            ("Disable.TButton", self.RED,   "#d4748a"),
-        ):
-            s.configure(name, font=("Segoe UI", 10, "bold"), foreground=self.SURFACE,
-                        background=bg, padding=(14, 7), relief="flat")
-            s.map(name, background=[("active", active_bg), ("disabled", "#45475a")])
-
-        s.configure("Treeview",
-                    background=self.SURFACE, foreground=self.FG,
-                    fieldbackground=self.SURFACE, rowheight=28,
-                    font=("Segoe UI", 10), borderwidth=0)
-        s.configure("Treeview.Heading",
-                    background=self.SURFACE, foreground=self.ACCENT,
-                    font=("Segoe UI", 10, "bold"), padding=(4, 6), relief="flat")
-        s.map("Treeview",
-              background=[("selected", self.OVERLAY)],
-              foreground=[("selected", self.FG)])
-
-        s.configure("Vertical.TScrollbar",
-                    background=self.OVERLAY, troughcolor=self.SURFACE,
-                    arrowcolor=self.SUBTEXT, borderwidth=0)
-
-    # ── UI layout ─────────────────────────────────────────────────────────────
+    # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        # Header
-        hdr = ttk.Frame(self, padding=(18, 14, 18, 6))
-        hdr.pack(fill=tk.X)
-        ttk.Label(hdr, text="Windows 11 Security Settings Scanner",
-                  style="Header.TLabel").pack(side=tk.LEFT)
-        admin_text = ("✓ Running as Administrator" if is_admin()
-                      else "⚠  Not Administrator — changes may fail")
-        admin_fg = self.GREEN if is_admin() else self.RED
-        ttk.Label(hdr, text=admin_text, style="Sub.TLabel",
-                  foreground=admin_fg).pack(side=tk.RIGHT)
+        # ── Title bar ────────────────────────────────────────────────────────
+        title_bar = tk.Frame(self, bg=C.BG)
+        title_bar.pack(fill=tk.X, padx=20, pady=(16, 0))
 
-        # Separator
-        tk.Frame(self, bg=self.OVERLAY, height=1).pack(fill=tk.X, padx=18)
+        tk.Label(title_bar, text="🛡  Windows Security",
+                 font=("Segoe UI", 18, "bold"), bg=C.BG, fg=C.TEXT).pack(side=tk.LEFT)
 
-        # Toolbar
-        tb = ttk.Frame(self, padding=(18, 10, 18, 6))
-        tb.pack(fill=tk.X)
-        self._scan_btn = ttk.Button(tb, text="  Scan", style="Scan.TButton",
-                                    command=self._scan_threaded)
-        self._scan_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self._enable_btn = ttk.Button(tb, text="  Enable All", style="Enable.TButton",
-                                      command=self._confirm_enable_all)
-        self._enable_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self._disable_btn = ttk.Button(tb, text="  Disable All", style="Disable.TButton",
-                                       command=self._confirm_disable_all)
-        self._disable_btn.pack(side=tk.LEFT)
-        self._ts_lbl = ttk.Label(tb, text="Not scanned yet", style="Sub.TLabel")
+        admin_text = "✓ Administrator" if is_admin() else "⚠  Not Administrator — changes may fail"
+        admin_color = C.GREEN if is_admin() else C.RED
+        tk.Label(title_bar, text=admin_text, font=("Segoe UI", 9),
+                 bg=C.BG, fg=admin_color).pack(side=tk.RIGHT, padx=4)
+
+        # ── Toolbar ──────────────────────────────────────────────────────────
+        toolbar = tk.Frame(self, bg=C.BG)
+        toolbar.pack(fill=tk.X, padx=20, pady=(10, 12))
+
+        for label, cmd, fg, hov in (
+            ("  Scan All",      self._scan_all,     C.ACCENT,  "#005a9e"),
+            ("  Enable All",  self._confirm_enable, C.GREEN,   "#0b5e0b"),
+            ("  Disable All", self._confirm_disable, C.RED,    "#9a1f1a"),
+        ):
+            btn = tk.Button(toolbar, text=label, font=("Segoe UI", 10, "bold"),
+                            bg=C.CARD, fg=fg, activebackground=hov,
+                            activeforeground="white", relief=tk.FLAT,
+                            bd=0, padx=16, pady=7, cursor="hand2",
+                            highlightthickness=1, highlightbackground=C.DIVIDER,
+                            command=cmd)
+            btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._ts_lbl = tk.Label(toolbar, text="", font=("Segoe UI", 9),
+                                bg=C.BG, fg=C.SUBTEXT)
         self._ts_lbl.pack(side=tk.RIGHT)
 
-        # Summary counts
-        counts_frame = ttk.Frame(self, padding=(18, 0, 18, 6))
-        counts_frame.pack(fill=tk.X)
-        self._enabled_var  = tk.StringVar(value="Enabled: —")
-        self._disabled_var = tk.StringVar(value="Disabled: —")
-        self._total_var    = tk.StringVar(value=f"Total: {len(SETTINGS)}")
-        for var, fg in (
-            (self._enabled_var,  self.GREEN),
-            (self._disabled_var, self.RED),
-            (self._total_var,    self.SUBTEXT),
-        ):
-            tk.Label(counts_frame, textvariable=var, bg=self.BG, fg=fg,
-                     font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 18))
+        # ── Divider ──────────────────────────────────────────────────────────
+        tk.Frame(self, bg=C.DIVIDER, height=1).pack(fill=tk.X)
 
-        # Tree
-        tree_frame = ttk.Frame(self, padding=(18, 0))
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+        # ── Body (sidebar + content) ──────────────────────────────────────────
+        body = tk.Frame(self, bg=C.BG)
+        body.pack(fill=tk.BOTH, expand=True)
 
-        self._tree = ttk.Treeview(tree_frame, columns=self.COLS,
-                                  show="headings", selectmode="browse")
-        for col, width in zip(self.COLS, (220, 110, 90, 0)):
-            self._tree.heading(col, text=col)
-            if width:
-                self._tree.column(col, width=width, minwidth=60, stretch=False)
-            else:
-                self._tree.column(col, minwidth=120, stretch=True)
+        self._sidebar = tk.Frame(body, bg=C.SIDEBAR, width=210)
+        self._sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        self._sidebar.pack_propagate(False)
 
-        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
-                            command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Frame(body, bg=C.DIVIDER, width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+        # scrollable content panel
+        content_outer = tk.Frame(body, bg=C.BG)
+        content_outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._canvas = tk.Canvas(content_outer, bg=C.BG,
+                                 highlightthickness=0, bd=0)
+        vsb = tk.Scrollbar(content_outer, orient=tk.VERTICAL,
+                           command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self._tree.tag_configure("enabled",  foreground=self.GREEN)
-        self._tree.tag_configure("disabled", foreground=self.RED)
-        self._tree.tag_configure("unknown",  foreground=self.YELLOW)
+        self._content = tk.Frame(self._canvas, bg=C.BG)
+        self._cwin = self._canvas.create_window(
+            (0, 0), window=self._content, anchor="nw")
 
-        for s in SETTINGS:
-            self._tree.insert("", tk.END, iid=s["name"],
-                              values=(s["name"], s["category"], "?", s["desc"]),
-                              tags=("unknown",))
+        self._content.bind("<Configure>", self._on_content_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        self._canvas.bind("<MouseWheel>",
+                          lambda e: self._canvas.yview_scroll(-1 * (e.delta // 120), "units"))
 
-        # Right-click context menu
-        self._ctx_menu = tk.Menu(self, tearoff=False, bg=self.OVERLAY,
-                                 fg=self.FG, activebackground=self.BLUE,
-                                 activeforeground=self.SURFACE)
-        self._ctx_menu.add_command(label="Enable this setting",
-                                   command=lambda: self._toggle_selected(True))
-        self._ctx_menu.add_command(label="Disable this setting",
-                                   command=lambda: self._toggle_selected(False))
-        self._tree.bind("<Button-3>", self._show_ctx_menu)
+        # ── Sidebar categories ────────────────────────────────────────────────
+        self._cat_frames: dict[str, tk.Frame] = {}
+        for cat in CATEGORIES:
+            frm = tk.Frame(self._sidebar, bg=C.SIDEBAR, cursor="hand2")
+            frm.pack(fill=tk.X)
 
-        # Log
-        log_frame = ttk.Frame(self, padding=(18, 6, 18, 6))
-        log_frame.pack(fill=tk.X)
-        tk.Label(log_frame, text="Activity Log", bg=self.BG, fg=self.SUBTEXT,
-                 font=("Segoe UI", 9)).pack(anchor=tk.W, pady=(0, 3))
+            bar = tk.Frame(frm, bg=C.SIDEBAR, width=4)
+            bar.pack(side=tk.LEFT, fill=tk.Y)
+
+            inner = tk.Frame(frm, bg=C.SIDEBAR, pady=10, padx=12)
+            inner.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            tk.Label(inner, text=cat["icon"], font=("Segoe UI Emoji", 20),
+                     bg=C.SIDEBAR, fg=C.TEXT).pack(side=tk.LEFT, padx=(0, 10))
+            tk.Label(inner, text=cat["label"], font=("Segoe UI", 10),
+                     bg=C.SIDEBAR, fg=C.TEXT, justify=tk.LEFT,
+                     anchor="w").pack(side=tk.LEFT, fill=tk.X)
+
+            self._cat_frames[cat["id"]] = (frm, bar, inner)
+
+            for widget in (frm, bar, inner) + tuple(inner.winfo_children()):
+                widget.bind("<Button-1>",
+                            lambda _, cid=cat["id"]: self._select_category(cid))
+                widget.bind("<Enter>",
+                            lambda _, f=frm, b=bar, i=inner: self._hover(f, b, i, True))
+                widget.bind("<Leave>",
+                            lambda _, f=frm, b=bar, i=inner: self._hover(f, b, i, False))
+
+        # ── Log area ──────────────────────────────────────────────────────────
+        tk.Frame(self, bg=C.DIVIDER, height=1).pack(fill=tk.X)
+        log_frame = tk.Frame(self, bg=C.CARD)
+        log_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Label(log_frame, text="Activity log", font=("Segoe UI", 9, "bold"),
+                 bg=C.CARD, fg=C.SUBTEXT, padx=14, pady=4).pack(anchor=tk.W)
+
         self._log = scrolledtext.ScrolledText(
-            log_frame, height=6,
-            bg=self.SURFACE, fg=self.FG, insertbackground=self.FG,
+            log_frame, height=5, bg=C.CARD, fg=C.TEXT,
             font=("Consolas", 9), relief=tk.FLAT, state=tk.DISABLED,
+            insertbackground=C.TEXT, padx=14,
         )
         self._log.pack(fill=tk.X)
 
-        # Status bar
-        self._status_var = tk.StringVar(value="Ready  —  right-click a row to toggle individual settings")
-        tk.Label(self, textvariable=self._status_var, bg="#11111b", fg=self.SUBTEXT,
-                 anchor=tk.W, padx=18, pady=4,
-                 font=("Segoe UI", 9)).pack(fill=tk.X, side=tk.BOTTOM)
+        # status bar
+        self._status_var = tk.StringVar(value="Ready")
+        tk.Label(self, textvariable=self._status_var, bg=C.DIVIDER, fg=C.SUBTEXT,
+                 anchor=tk.W, padx=14, pady=3, font=("Segoe UI", 9)
+                 ).pack(fill=tk.X, side=tk.BOTTOM)
 
-    # ── Logging helpers ───────────────────────────────────────────────────────
+    # ── Canvas resize helpers ─────────────────────────────────────────────────
+
+    def _on_content_configure(self, _=None):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self._canvas.itemconfig(self._cwin, width=event.width)
+
+    # ── Sidebar interaction ───────────────────────────────────────────────────
+
+    def _hover(self, frm, bar, inner, entering: bool):
+        if self._active_cat == self._cat_id_for(frm):
+            return
+        bg = C.HOVER if entering else C.SIDEBAR
+        for w in (frm, bar, inner):
+            w.configure(bg=bg)
+        for w in inner.winfo_children():
+            w.configure(bg=bg)
+
+    def _cat_id_for(self, frm) -> str:
+        for cid, (f, *_) in self._cat_frames.items():
+            if f is frm:
+                return cid
+        return ""
+
+    def _select_category(self, cat_id: str) -> None:
+        # Deselect old
+        if self._active_cat in self._cat_frames:
+            frm, bar, inner = self._cat_frames[self._active_cat]
+            for w in (frm, bar, inner):
+                w.configure(bg=C.SIDEBAR)
+            for w in inner.winfo_children():
+                w.configure(bg=C.SIDEBAR)
+
+        self._active_cat = cat_id
+        frm, bar, inner = self._cat_frames[cat_id]
+        for w in (frm, inner):
+            w.configure(bg=C.SEL_BG)
+        bar.configure(bg=C.SEL_BAR)
+        for w in inner.winfo_children():
+            w.configure(bg=C.SEL_BG)
+
+        self._build_content(cat_id)
+        self._canvas.yview_moveto(0)
+
+    # ── Content panel ─────────────────────────────────────────────────────────
+
+    def _build_content(self, cat_id: str) -> None:
+        for w in self._content.winfo_children():
+            w.destroy()
+
+        cat = next(c for c in CATEGORIES if c["id"] == cat_id)
+        settings = [s for s in SETTINGS if s["category"] == cat_id]
+
+        # Section header
+        hdr = tk.Frame(self._content, bg=C.BG)
+        hdr.pack(fill=tk.X, padx=24, pady=(20, 6))
+        tk.Label(hdr, text=f"{cat['icon']}  {cat['label'].replace(chr(10), ' ')}",
+                 font=("Segoe UI", 16, "bold"), bg=C.BG, fg=C.TEXT).pack(side=tk.LEFT)
+
+        for i, s in enumerate(settings):
+            self._setting_row(self._content, s, i < len(settings) - 1)
+
+        # padding at bottom
+        tk.Frame(self._content, bg=C.BG, height=20).pack()
+
+    def _setting_row(self, parent, s: dict, divider: bool) -> None:
+        card = tk.Frame(parent, bg=C.CARD,
+                        highlightthickness=1, highlightbackground=C.DIVIDER)
+        card.pack(fill=tk.X, padx=24, pady=(0, 8))
+
+        inner = tk.Frame(card, bg=C.CARD, padx=16, pady=14)
+        inner.pack(fill=tk.X)
+
+        # Left: text
+        text_col = tk.Frame(inner, bg=C.CARD)
+        text_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        name_row = tk.Frame(text_col, bg=C.CARD)
+        name_row.pack(fill=tk.X)
+
+        tk.Label(name_row, text=s["name"], font=("Segoe UI", 11, "bold"),
+                 bg=C.CARD, fg=C.TEXT, anchor="w").pack(side=tk.LEFT)
+
+        if s.get("readonly"):
+            tk.Label(name_row, text="  read only", font=("Segoe UI", 9),
+                     bg=C.CARD, fg=C.SUBTEXT).pack(side=tk.LEFT)
+
+        lbl = tk.Label(text_col, text="Checking…", font=("Segoe UI", 9),
+                       bg=C.CARD, fg=C.SUBTEXT, anchor="w")
+        lbl.pack(fill=tk.X)
+        self._status_labels[s["id"]] = lbl
+
+        tk.Label(text_col, text=s["desc"], font=("Segoe UI", 9),
+                 bg=C.CARD, fg=C.SUBTEXT, anchor="w",
+                 wraplength=580, justify=tk.LEFT).pack(fill=tk.X, pady=(4, 0))
+
+        # Right: toggle
+        toggle = Toggle(inner, readonly=s.get("readonly", False), bg=C.CARD,
+                        command=lambda v, setting=s: self._on_toggle(setting, v))
+        toggle.pack(side=tk.RIGHT, padx=(16, 0))
+        self._toggles[s["id"]] = toggle
+
+    # ── Logging ───────────────────────────────────────────────────────────────
 
     def _log_msg(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -401,168 +666,119 @@ class App(tk.Tk):
     def _set_status(self, msg: str) -> None:
         self._status_var.set(msg)
 
-    def _set_buttons(self, active: bool) -> None:
-        state = tk.NORMAL if active else tk.DISABLED
-        for btn in (self._scan_btn, self._enable_btn, self._disable_btn):
-            btn.configure(state=state)
+    # ── Per-setting update ────────────────────────────────────────────────────
 
-    # ── Row update ────────────────────────────────────────────────────────────
+    def _apply_result(self, s: dict, enabled: bool | None) -> None:
+        toggle = self._toggles.get(s["id"])
+        label  = self._status_labels.get(s["id"])
+        if toggle:
+            toggle.set(enabled)
+        if label:
+            if enabled is True:
+                label.configure(text="On", fg=C.GREEN)
+            elif enabled is False:
+                label.configure(text="Off", fg=C.RED)
+            else:
+                label.configure(text="Unknown / error", fg=C.AMBER)
 
-    def _update_row(self, setting: dict, status: str, tag: str) -> None:
-        self._tree.item(
-            setting["name"],
-            values=(setting["name"], setting["category"], status, setting["desc"]),
-            tags=(tag,),
-        )
+    # ── Toggle callback ───────────────────────────────────────────────────────
 
-    def _refresh_counts(self) -> None:
-        enabled = disabled = unknown = 0
-        for s in SETTINGS:
-            vals = self._tree.item(s["name"], "values")
-            if vals:
-                st = vals[2]
-                if st == "ENABLED":
-                    enabled += 1
-                elif st == "DISABLED":
-                    disabled += 1
-                else:
-                    unknown += 1
-        self._enabled_var.set(f"Enabled: {enabled}")
-        self._disabled_var.set(f"Disabled: {disabled}")
-        self._total_var.set(f"Total: {len(SETTINGS)}  (Unknown: {unknown})")
+    def _on_toggle(self, s: dict, new_state: bool) -> None:
+        def _apply():
+            cmd = s["enable_cmd"] if new_state else s["disable_cmd"]
+            self._set_status(f"{'Enabling' if new_state else 'Disabling'}: {s['name']}…")
+            _, err, rc = run_ps(cmd)
+            if rc == 0:
+                self._apply_result(s, new_state)
+                self._log_msg(f"{'✓ Enabled' if new_state else '✓ Disabled'}: {s['name']}")
+            else:
+                # revert toggle on failure
+                self._apply_result(s, not new_state)
+                self._log_msg(f"✗ Failed — {s['name']}: {err[:120]}")
+            self._set_status("Ready")
+        threading.Thread(target=_apply, daemon=True).start()
 
-    # ── Context menu ──────────────────────────────────────────────────────────
+    # ── Scan all ──────────────────────────────────────────────────────────────
 
-    def _show_ctx_menu(self, event: tk.Event) -> None:
-        row = self._tree.identify_row(event.y)
-        if row:
-            self._tree.selection_set(row)
-            self._ctx_menu.post(event.x_root, event.y_root)
+    def _scan_all(self) -> None:
+        threading.Thread(target=self._do_scan, daemon=True).start()
 
-    def _toggle_selected(self, enable: bool) -> None:
-        sel = self._tree.selection()
-        if not sel:
-            return
-        name = sel[0]
-        setting = next((s for s in SETTINGS if s["name"] == name), None)
-        if setting:
-            threading.Thread(
-                target=self._apply_one, args=(setting, enable), daemon=True
-            ).start()
-
-    # ── Scan ─────────────────────────────────────────────────────────────────
-
-    def _scan_threaded(self) -> None:
-        self._set_buttons(False)
-        threading.Thread(target=self._scan, daemon=True).start()
-
-    def _scan(self) -> None:
-        self._set_status("Scanning…")
+    def _do_scan(self) -> None:
+        self._set_status("Scanning all settings…")
         self._log_msg("Starting scan…")
-        enabled = disabled = errors = 0
-
+        ok = err = 0
         for s in SETTINGS:
             self._set_status(f"Checking: {s['name']}…")
-            out, err, rc = run_ps(s["check_cmd"])
+            out, error, rc = run_ps(s["check_cmd"])
             if rc != 0 and not out:
-                self._update_row(s, "Error", "unknown")
-                self._log_msg(f"  ✗ {s['name']}: {err[:100]}")
-                errors += 1
-            elif check_is_enabled(s, out):
-                self._update_row(s, "ENABLED", "enabled")
-                enabled += 1
+                self._apply_result(s, None)
+                self._log_msg(f"  ✗ {s['name']}: {error[:100]}")
+                err += 1
             else:
-                self._update_row(s, "DISABLED", "disabled")
-                disabled += 1
-
-        self._refresh_counts()
-        self._ts_lbl.config(text=f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
-        summary = f"Scan complete — {enabled} enabled, {disabled} disabled, {errors} errors"
+                enabled = is_setting_enabled(s, out)
+                self._apply_result(s, enabled)
+                ok += 1
+        self._ts_lbl.configure(
+            text=f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
+        summary = f"Scan complete — {ok} read, {err} errors"
         self._log_msg(summary)
         self._set_status(summary)
-        self._set_buttons(True)
 
     # ── Enable / Disable all ──────────────────────────────────────────────────
 
-    def _confirm_enable_all(self) -> None:
-        if messagebox.askyesno(
-            "Enable All",
-            "Enable ALL listed security settings?\n\nContinue?",
-        ):
-            self._set_buttons(False)
+    def _confirm_enable(self) -> None:
+        if messagebox.askyesno("Enable All",
+                               "Enable ALL security settings?\n\nContinue?"):
             threading.Thread(target=self._apply_all, args=(True,), daemon=True).start()
 
-    def _confirm_disable_all(self) -> None:
-        if messagebox.askyesno(
-            "Disable All",
-            "WARNING: This will DISABLE all listed security settings.\n\n"
-            "Only do this in a controlled test / lab environment.\n\nContinue?",
-            icon="warning",
-        ):
-            self._set_buttons(False)
+    def _confirm_disable(self) -> None:
+        if messagebox.askyesno("Disable All",
+                               "WARNING: This will DISABLE all security settings.\n\n"
+                               "Only use this in a controlled test environment.\n\nContinue?",
+                               icon="warning"):
             threading.Thread(target=self._apply_all, args=(False,), daemon=True).start()
 
     def _apply_all(self, enable: bool) -> None:
         verb = "Enabling" if enable else "Disabling"
         self._log_msg(f"{verb} all settings…")
         ok = fail = 0
-
         for s in SETTINGS:
+            if s.get("readonly"):
+                continue
             self._set_status(f"{verb}: {s['name']}…")
             cmd = s["enable_cmd"] if enable else s["disable_cmd"]
             _, err, rc = run_ps(cmd)
             if rc == 0:
-                tag, status = ("enabled", "ENABLED") if enable else ("disabled", "DISABLED")
-                self._update_row(s, status, tag)
+                self._apply_result(s, enable)
                 self._log_msg(f"  ✓ {s['name']}")
                 ok += 1
             else:
                 self._log_msg(f"  ✗ {s['name']}: {err[:100]}")
                 fail += 1
-
-        self._refresh_counts()
         summary = f"Done — {ok} succeeded, {fail} failed"
         self._log_msg(summary)
         self._set_status(summary)
-        self._set_buttons(True)
-        # Refresh actual state after applying
-        threading.Thread(target=self._scan, daemon=True).start()
-
-    # ── Single toggle ─────────────────────────────────────────────────────────
-
-    def _apply_one(self, setting: dict, enable: bool) -> None:
-        verb = "Enabling" if enable else "Disabling"
-        self._set_status(f"{verb}: {setting['name']}…")
-        cmd = setting["enable_cmd"] if enable else setting["disable_cmd"]
-        _, err, rc = run_ps(cmd)
-        if rc == 0:
-            tag, status = ("enabled", "ENABLED") if enable else ("disabled", "DISABLED")
-            self._update_row(setting, status, tag)
-            self._log_msg(f"  ✓ {setting['name']} — {status}")
-        else:
-            self._log_msg(f"  ✗ {setting['name']}: {err[:100]}")
-        self._refresh_counts()
-        self._set_status("Ready")
+        threading.Thread(target=self._do_scan, daemon=True).start()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Temporary root needed to show messagebox before main window opens
     if not is_admin():
         _tmp = tk.Tk()
         _tmp.withdraw()
-        answer = messagebox.askyesno(
-            "Administrator Privileges Required",
-            "This tool needs Administrator privileges to read and modify security "
-            "settings.\n\nRestart as Administrator now?",
-        )
-        _tmp.destroy()
-        if answer:
+        if messagebox.askyesno(
+            "Administrator Required",
+            "This tool needs Administrator privileges to read and modify "
+            "security settings.\n\nRestart as Administrator now?",
+        ):
+            _tmp.destroy()
             elevate()
-        # Fall through: run in limited mode if user declines
+        _tmp.destroy()
 
     app = App()
+    # Auto-scan on launch
+    app.after(300, app._scan_all)
     app.mainloop()
 
 
