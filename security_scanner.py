@@ -77,11 +77,12 @@ SETTINGS: list[dict] = [
     {
         "id": "tamper", "category": "virus",
         "name": "Tamper Protection",
-        "desc": "Prevents others from tampering with important Windows Security settings.",
+        "desc": "Prevents others from tampering with important Windows Security settings. Must be changed via Windows Security app — cannot be modified programmatically.",
         "check_cmd": "(Get-MpComputerStatus).IsTamperProtected",
         "enabled_value": "True",
-        "enable_cmd":  "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows Defender\\Features' -Name TamperProtection -Value 5",
-        "disable_cmd": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows Defender\\Features' -Name TamperProtection -Value 4",
+        "enable_cmd":  "Write-Host 'Tamper Protection must be changed in Windows Security app.'",
+        "disable_cmd": "Write-Host 'Tamper Protection must be changed in Windows Security app.'",
+        "readonly": True,
     },
     {
         "id": "controlledfolder", "category": "virus",
