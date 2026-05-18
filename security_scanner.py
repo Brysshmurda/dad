@@ -780,6 +780,7 @@ class App(tk.Tk):
             threading.Thread(target=self._apply_all, args=(False,), daemon=True).start()
 
     def _apply_all(self, enable: bool) -> None:
+        import json as _json
         verb = "Enabling" if enable else "Disabling"
         self.after(0, self._log_msg, f"{verb} all settings…")
         ok = 0
@@ -787,6 +788,7 @@ class App(tk.Tk):
 
         # Batch all Set-MpPreference calls into one PowerShell process to avoid
         # Defender WMI provider hang when invoked in rapid succession.
+        # Each command gets its own try/catch so one failure doesn't kill the rest.
         mp_settings = [
             s for s in SETTINGS
             if not s.get("readonly")
@@ -800,17 +802,28 @@ class App(tk.Tk):
 
         if mp_settings:
             self.after(0, self._set_status, f"{verb}: Defender scan settings…")
-            batch = "$ErrorActionPreference = 'SilentlyContinue'\n" + "\n".join(
-                s["enable_cmd"] if enable else s["disable_cmd"] for s in mp_settings
-            )
-            _, err, rc = run_ps(batch)
+            lines = ["$r = [ordered]@{}"]
             for s in mp_settings:
-                if rc == 0:
+                cmd = s["enable_cmd"] if enable else s["disable_cmd"]
+                lines.append(
+                    f"$r['{s['id']}'] = try {{ {cmd}; 'ok' }}"
+                    f" catch {{ $_.Exception.Message }}"
+                )
+            lines.append("$r | ConvertTo-Json -Compress")
+            out, _, _ = run_ps("\n".join(lines))
+            try:
+                results = _json.loads(out) if out else {}
+            except _json.JSONDecodeError:
+                results = {}
+            for s in mp_settings:
+                result = results.get(s["id"])
+                if result == "ok":
                     self.after(0, self._apply_result, s, enable)
                     self.after(0, self._log_msg, f"  ✓ {s['name']}")
                     ok += 1
                 else:
-                    self.after(0, self._log_msg, f"  Skipped {s['name']}: {err[:80]}")
+                    reason = str(result)[:80] if result else "no response"
+                    self.after(0, self._log_msg, f"  Skipped {s['name']}: {reason}")
                     skipped.append(s["name"])
 
         for s in other_settings:
@@ -826,7 +839,12 @@ class App(tk.Tk):
                 skipped.append(s["name"])
 
         if skipped:
-            self.after(0, self._log_msg, f"Skipped ({len(skipped)}): {', '.join(skipped)}")
+            self.after(0, self._log_msg,
+                       f"Skipped ({len(skipped)}): {', '.join(skipped)}")
+            if not enable:
+                self.after(0, self._log_msg,
+                           "Tip: Turn off Tamper Protection in Windows Security first"
+                           " to allow disabling Defender settings.")
         summary = f"Done — {ok} succeeded, {len(skipped)} skipped"
         self.after(0, self._log_msg, summary)
         self.after(0, self._set_status, summary)
